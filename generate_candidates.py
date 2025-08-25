@@ -51,6 +51,7 @@ WHERE {
           pr:P1476 ?objecttitel
         ]
       ] .
+      FILTER NOT EXISTS {?item wdt:P7763 []}
     }
     GROUP BY ?item
   }
