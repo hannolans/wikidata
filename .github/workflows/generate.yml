@@ -3,7 +3,7 @@ name: Generate candidates.csv
 on:
   workflow_dispatch:
   schedule:
-    - cron: "13 5 * * *"   # dagelijks 05:13 UTC
+    - cron: '13 5 * * *'  # daily 05:13 UTC
 
 jobs:
   run:
@@ -15,21 +15,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pandas pywikibot requests
 
-      - name: Run SPARQL → CSV
+      - name: Run SPARQL to CSV
         env:
-          LIMIT: "200"                # optioneel, als je script LIMIT leest
+          LIMIT: '200'
         run: |
           mkdir -p data
           python generate_candidates.py
 
-      - name: Debug: list files
+      - name: Debug list files
         run: |
           echo "PWD=$(pwd)"
           ls -la
