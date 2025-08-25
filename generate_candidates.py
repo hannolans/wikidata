@@ -6,7 +6,7 @@ from pathlib import Path
 
 LIMIT = int(os.environ.get("LIMIT", "200"))
 
-QUERY = f"""
+QUERY = """
 PREFIX wd:   <http://www.wikidata.org/entity/>
 PREFIX wdt:  <http://www.wikidata.org/prop/direct/>
 PREFIX p:    <http://www.wikidata.org/prop/>
@@ -25,8 +25,8 @@ SELECT
   ?beroepLabel
   ?collectieLabel
   (SAMPLE(?fy) AS ?floruit)
-WHERE {{
-  {{
+WHERE {
+  {
     SELECT
       ?item
       (SAMPLE(?objectsoort) AS ?objectsoort)
@@ -35,14 +35,15 @@ WHERE {{
       (SAMPLE(?beroep0)     AS ?beroep)
       (SAMPLE(?collectie0)  AS ?collectie)
       (SAMPLE(?fy0)         AS ?fy)
-    WHERE {{
+    WHERE {
       ?item wdt:P6379 wd:Q1616123 ;
             wdt:P31  wd:Q5 .
-      OPTIONAL {{ ?item wdt:P1317 ?floruit1 . BIND(YEAR(?floruit1) AS ?fy0) }}
-      OPTIONAL {{ ?item wdt:P937  ?werkloc0. }}
-      OPTIONAL {{ ?item wdt:P106  ?beroep0. }}
-      OPTIONAL {{ ?item wdt:P6379 ?collectie0. }}
-      FILTER NOT EXISTS {{ ?item wdt:P7763 [] . }}
+
+      OPTIONAL { ?item wdt:P1317 ?floruit1 . BIND(YEAR(?floruit1) AS ?fy0) }
+      OPTIONAL { ?item wdt:P937  ?werkloc0. }
+      OPTIONAL { ?item wdt:P106  ?beroep0. }
+      OPTIONAL { ?item wdt:P6379 ?collectie0. }
+
       ?item p:P6379 [
         ps:P6379 wd:Q1616123 ;
         prov:wasDerivedFrom [
@@ -50,12 +51,12 @@ WHERE {{
           pr:P1476 ?objecttitel
         ]
       ] .
-    }}
+    }
     GROUP BY ?item
-  }}
-  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,nl,en". }}
-}}
-LIMIT {LIMIT}
+  }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,nl,en". }
+}
+LIMIT 200
 """
 
 UA = os.environ.get(
