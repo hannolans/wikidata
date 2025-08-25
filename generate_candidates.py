@@ -24,7 +24,7 @@ SELECT
   ?werklocatieLabel
   ?beroepLabel
   ?collectieLabel
-  (SAMPLE(?fy) AS ?floruit)
+  ?floruit
 WHERE {
   {
     SELECT
@@ -34,7 +34,7 @@ WHERE {
       (SAMPLE(?werkloc0)    AS ?werklocatie)
       (SAMPLE(?beroep0)     AS ?beroep)
       (SAMPLE(?collectie0)  AS ?collectie)
-      (SAMPLE(?fy0)         AS ?fy)
+      (SAMPLE(?fy0)         AS ?floruit)
     WHERE {
       ?item wdt:P6379 wd:Q1616123 ;
             wdt:P31  wd:Q5 .
@@ -56,7 +56,7 @@ WHERE {
   }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,nl,en". }
 }
-LIMIT 200
+LIMIT 10
 """
 
 UA = os.environ.get(
