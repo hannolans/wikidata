@@ -36,6 +36,7 @@ WHERE {
       (SAMPLE(?collectie0)  AS ?collectie)
       (SAMPLE(?fy0)         AS ?floruit)
     WHERE {
+      BIND(RAND() AS ?sortKey)
       ?item wdt:P6379 wd:Q1616123 ;
             wdt:P31  wd:Q5 .
 
@@ -57,6 +58,7 @@ WHERE {
   }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,nl,en". }
 }
+ORDER BY ?sortKey
 LIMIT 10
 """
 
