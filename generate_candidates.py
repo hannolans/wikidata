@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
-import os, sys, time, traceback, csv, tempfile
-from pathlib import Path
-import requests
+import os, sys, time, traceback
 import pandas as pd
+import requests
+from pathlib import Path
 
-# ---- Config ----------------------------------------------------
-LIMIT = int(os.environ.get("LIMIT", "10"))
-OUTFILE = Path("data") / "candidates.csv"
-KEEP_NEWLINES = bool(int(os.environ.get("KEEP_NEWLINES", "0")))  # 0=vervang \n door spatie, 1=laat staan (gequote)
-RESPECT_WDQS = float(os.environ.get("WDQS_PAUSE", "0.0"))        # extra pauze na query (s)
+# --- nieuw ---
+import csv, tempfile, unicodedata, re  # voor veilig CSV schrijven & sanitizing
 
-UA = os.environ.get(
-    "WDQS_USER_AGENT",
-    "CopyClear-SPARQL/0.3 (+https://github.com/<user>/<repo>; https://www.wikidata.org/wiki/User:CopyClear)"
-)
-WDQS_URL = "https://query.wikidata.org/sparql"
-HEADERS = {"User-Agent": UA, "Accept": "application/sparql-results+json"}
+LIMIT = int(os.environ.get("LIMIT", "200"))
+SANITIZE = bool(int(os.environ.get("SANITIZE", "1")))  # 1 = schoonmaken aan (default)
 
-QUERY_TEMPLATE = """
+QUERY = """
 PREFIX wd:   <http://www.wikidata.org/entity/>
 PREFIX wdt:  <http://www.wikidata.org/prop/direct/>
 PREFIX p:    <http://www.wikidata.org/prop/>
@@ -46,9 +39,8 @@ WHERE {
       (SAMPLE(?beroep0)     AS ?beroep)
       (SAMPLE(?collectie0)  AS ?collectie)
       (SAMPLE(?fy0)         AS ?floruit)
-      (SAMPLE(?rand)        AS ?sortKey)
     WHERE {
-      BIND(RAND() AS ?rand)
+      BIND(RAND() AS ?sortKey)
       ?item wdt:P6379 wd:Q1616123 ;
             wdt:P31  wd:Q5 .
 
@@ -64,55 +56,92 @@ WHERE {
           pr:P1476 ?objecttitel
         ]
       ] .
-      FILTER NOT EXISTS { ?item wdt:P7763 [] }
+      FILTER NOT EXISTS {?item wdt:P7763 []}
     }
     GROUP BY ?item
   }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],mul,nl,en". }
 }
 ORDER BY ?sortKey
-LIMIT {limit}
+LIMIT 10
 """
 
-COLUMNS = [
-    "item", "objecttitel", "itemLabel", "objectsoortLabel",
-    "beroepLabel", "collectieLabel", "floruit", "werklocatieLabel", "qid"
-]
+UA = os.environ.get(
+    "WDQS_USER_AGENT",
+    "CopyClear-SPARQL/0.2 (+https://github.com/<user>/<repo>; https://www.wikidata.org/wiki/User:CopyClear)"
+)
+WDQS_URL = "https://query.wikidata.org/sparql"
+HEADERS = {
+    "User-Agent": UA,
+    "Accept": "application/sparql-results+json"
+}
 
-# ---- Helpers ---------------------------------------------------
 def run_query(query: str, tries=5, backoff=2.0):
     for i in range(tries):
         r = requests.get(WDQS_URL, params={"query": query}, headers=HEADERS, timeout=60)
         if r.status_code == 200:
             return r.json()
+        # WDQS geeft soms 400 bij throttling; body bevat hint
         print(f"[WARN] WDQS HTTP {r.status_code} (attempt {i+1}/{tries})", file=sys.stderr)
-        try: print(r.text[:1000], file=sys.stderr)
-        except Exception: pass
+        try:
+            print(r.text[:1000], file=sys.stderr)
+        except Exception:
+            pass
         time.sleep(backoff * (i+1))
     raise RuntimeError(f"WDQS failed after {tries} attempts")
 
 def json_to_df(data: dict) -> pd.DataFrame:
     rows = []
     for b in data.get("results", {}).get("bindings", []):
-        row = {k: v.get("value") for k, v in b.items()}
+        row = {}
+        for k, v in b.items():
+            row[k] = v.get("value")
         rows.append(row)
     return pd.DataFrame(rows)
 
 def qid_from_uri(u: str) -> str:
     return u.rsplit('/', 1)[-1] if isinstance(u, str) and u.startswith('http') else u
 
+# --- nieuw: sanitizing + veilig (atomic) CSV schrijven ---
+COLUMNS = [
+    "item","objecttitel","itemLabel","objectsoortLabel",
+    "beroepLabel","collectieLabel","floruit","werklocatieLabel","qid"
+]
+
 def sanitize_text(s: str) -> str:
     if not isinstance(s, str):
         return s
-    # verwijder carriage returns altijd; newlines eventueel behouden
-    s = s.replace("\r", " ")
-    if KEEP_NEWLINES:
-        return s
-    # normaliseer alle whitespace (incl. \n, \t) naar spaties
-    return " ".join(s.split())
+    s = unicodedata.normalize("NFC", s)
+    # vervang line/paragraph separators, CR/LF/tab door spaties
+    s = s.replace("\u2028", " ").replace("\u2029", " ").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    # niet-printbare control-chars eruit (behalve spatie)
+    s = "".join(ch for ch in s if ch.isprintable() or ch == " ")
+    # collapse whitespace
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
 
-def write_atomic_csv(df: pd.DataFrame, path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
+def prepare_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=COLUMNS)
+    if "item" in df.columns:
+        df["qid"] = df["item"].apply(qid_from_uri)
+    # zorg dat alle verwachte kolommen er zijn
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    # sanitizen tekstvelden
+    if SANITIZE:
+        for col in ["objecttitel","itemLabel","objectsoortLabel","beroepLabel","collectieLabel","werklocatieLabel"]:
+            if col in df.columns:
+                df[col] = df[col].map(sanitize_text)
+    # volgorde + NaN -> lege string
+    df = df[COLUMNS].fillna("")
+    return df
+
+def safe_write_csv(df: pd.DataFrame, out_path: Path):
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df = prepare_df(df)
+    # atomic write: eerst naar tmp, dan replace
     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", newline="") as tmp:
         tmp_name = tmp.name
         df.to_csv(
@@ -120,55 +149,26 @@ def write_atomic_csv(df: pd.DataFrame, path: Path):
             index=False,
             header=True,
             sep=",",
-            quoting=csv.QUOTE_ALL,      # forceer quotes -> geen 'malformed' door embedded \n/,
+            quoting=csv.QUOTE_ALL,   # forceer quotes: bestand blijft valide als er komma's/aanhalingstekens/\n in velden zitten
             doublequote=True,
             lineterminator="\n",
         )
-    os.replace(tmp_name, path)
+    os.replace(tmp_name, out_path)
 
-# ---- Main ------------------------------------------------------
 def main():
+    out = Path("data") / "candidates.csv"
     try:
-        query = QUERY_TEMPLATE.format(limit=LIMIT)
-        data = run_query(query)
-        if RESPECT_WDQS > 0:
-            time.sleep(RESPECT_WDQS)
-
+        data = run_query(QUERY)
         df = json_to_df(data)
-
-        if df.empty:
-            df = pd.DataFrame(columns=COLUMNS)
-        else:
-            # Afgeleide kolommen, schoonmaak en vaste volgorde
-            if "item" in df.columns:
-                df["qid"] = df["item"].apply(qid_from_uri)
-
-            for col in ["objecttitel", "itemLabel", "objectsoortLabel", "beroepLabel",
-                        "collectieLabel", "werklocatieLabel"]:
-                if col in df.columns:
-                    df[col] = df[col].map(sanitize_text)
-
-            # Zorg dat alle verwachte kolommen bestaan
-            for col in COLUMNS:
-                if col not in df.columns:
-                    df[col] = ""
-
-            # Alleen de gewenste kolommen en in vaste volgorde
-            df = df[COLUMNS]
-
-            # NaN -> lege string (anders wordt 'nan' weggeschreven)
-            df = df.fillna("")
-
-        write_atomic_csv(df, OUTFILE)
-        print(f"[OK] {len(df)} resultaten → {OUTFILE}")
+        safe_write_csv(df, out)
+        print(f"[OK] {len(df)} resultaten → {out}")
     except Exception as e:
         print("[ERROR] SPARQL faalde:", e, file=sys.stderr)
         traceback.print_exc()
         # Schrijf lege CSV met juiste kolommen zodat de workflow door kan
-        pd.DataFrame(columns=COLUMNS).to_csv(
-            OUTFILE, index=False, encoding="utf-8", lineterminator="\n", quoting=csv.QUOTE_ALL
-        )
-        print(f"[WARN] Lege CSV geschreven → {OUTFILE}")
+        empty = pd.DataFrame(columns=COLUMNS)
+        safe_write_csv(empty, out)
+        print(f"[WARN] Lege CSV geschreven → {out}")
 
 if __name__ == "__main__":
     main()
