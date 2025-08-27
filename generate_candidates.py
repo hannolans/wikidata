@@ -57,6 +57,7 @@ WHERE {
         ]
       ] .
       FILTER NOT EXISTS {?item wdt:P7763 []}
+      FILTER NOT EXISTS {?item wdt:P570 []}
     }
     GROUP BY ?item
   }
